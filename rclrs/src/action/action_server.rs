@@ -1,8 +1,9 @@
 use super::empty_goal_status_array;
 use crate::{
-    action::GoalUuid, error::ToResult, rcl_bindings::*, ActionGoalReceiver, CancelResponseCode, Clock, DropGuard, GoalStatusCode, Node, NodeHandle, QoSProfile, RclPrimitive, ActionServerReady,
-    RclPrimitiveHandle, RclPrimitiveKind, RclrsError, ReadyKind, TakeFailedAsNone, Waitable,
-    WaitableLifecycle, ENTITY_LIFECYCLE_MUTEX,
+    action::GoalUuid, error::ToResult, rcl_bindings::*, ActionGoalReceiver, ActionServerReady,
+    CancelResponseCode, Clock, DropGuard, GoalStatusCode, Node, NodeHandle, QoSProfile,
+    RclPrimitive, RclPrimitiveHandle, RclPrimitiveKind, RclrsError, ReadyKind, TakeFailedAsNone,
+    Waitable, WaitableLifecycle, ENTITY_LIFECYCLE_MUTEX,
 };
 use futures::future::BoxFuture;
 use ros_env::action_msgs::srv::CancelGoal_Response;
@@ -13,7 +14,7 @@ use std::{
     collections::HashMap,
     ffi::CString,
     future::Future,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard, Weak},
     time::Duration,
 };
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
@@ -320,6 +321,7 @@ impl<A: Action> ActionServerState<A> {
             node_handle: Arc::clone(&node.handle()),
             clock: clock,
             goals: Default::default(),
+            on_ready_slots: Default::default(),
         });
 
         let board = Arc::new(ActionServerGoalBoard::new(dispatch, handle, node));
@@ -690,6 +692,7 @@ impl<A: Action> RclPrimitive for ActionServerExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_server_goal_callback::<A>,
+                |h: &ActionServerHandle<A>| &h.on_ready_slots[0],
                 mk(ActionServerReady {
                     goal_request: true,
                     ..Default::default()
@@ -698,6 +701,7 @@ impl<A: Action> RclPrimitive for ActionServerExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_server_cancel_callback::<A>,
+                |h: &ActionServerHandle<A>| &h.on_ready_slots[1],
                 mk(ActionServerReady {
                     cancel_request: true,
                     ..Default::default()
@@ -706,6 +710,7 @@ impl<A: Action> RclPrimitive for ActionServerExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_server_result_callback::<A>,
+                |h: &ActionServerHandle<A>| &h.on_ready_slots[2],
                 mk(ActionServerReady {
                     result_request: true,
                     ..Default::default()
@@ -766,6 +771,9 @@ pub(crate) struct ActionServerHandle<A: Action> {
     /// Ensure the `impl_*` of the action server goals remain valid until they
     /// have expired or until the rcl_action_server_t gets fini-ed.
     goals: Mutex<HashMap<GoalUuid, Arc<ActionServerGoalHandle<A>>>>,
+    /// One guard per rcl callback slot (goal, cancel, result); see
+    /// [`OnReadySlotFn`](crate::executor::event_callback::OnReadySlotFn).
+    on_ready_slots: [AtomicBool; 3],
 }
 
 // SAFETY: The functions accessing this type, including drop(), shouldn't care about the thread

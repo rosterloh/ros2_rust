@@ -1,8 +1,9 @@
 use super::empty_goal_status_array;
 use crate::{
-    log_warn, rcl_bindings::*, CancelResponse, CancelResponseCode, DropGuard, GoalStatus, GoalStatusCode, GoalUuid, MultiCancelResponse, Node, NodeHandle, Promise, QoSProfile, ActionClientReady,
-    RclPrimitive, RclPrimitiveHandle, RclPrimitiveKind, RclrsError, ReadyKind, TakeFailedAsNone,
-    ToResult, Waitable, WaitableLifecycle, ENTITY_LIFECYCLE_MUTEX,
+    log_warn, rcl_bindings::*, ActionClientReady, CancelResponse, CancelResponseCode, DropGuard,
+    GoalStatus, GoalStatusCode, GoalUuid, MultiCancelResponse, Node, NodeHandle, Promise,
+    QoSProfile, RclPrimitive, RclPrimitiveHandle, RclPrimitiveKind, RclrsError, ReadyKind,
+    TakeFailedAsNone, ToResult, Waitable, WaitableLifecycle, ENTITY_LIFECYCLE_MUTEX,
 };
 use ros_env::{action_msgs::srv::CancelGoal_Response, builtin_interfaces::msg::Time};
 use rosidl_runtime_rs::{Action, Message, RmwFeedbackMessage, RmwGoalResponse, RmwResultResponse};
@@ -11,7 +12,7 @@ use std::{
     borrow::{Borrow, Cow},
     collections::HashMap,
     ffi::CString,
-    sync::{Arc, Mutex, MutexGuard, Weak},
+    sync::{atomic::AtomicBool, Arc, Mutex, MutexGuard, Weak},
 };
 use tokio::sync::{
     mpsc::{unbounded_channel, UnboundedSender},
@@ -358,6 +359,7 @@ impl<A: Action> ActionClientState<A> {
         let handle = Arc::new(ActionClientHandle {
             rcl_action_client: Mutex::new(rcl_action_client),
             node_handle: Arc::clone(&node.handle()),
+            on_ready_slots: Default::default(),
         });
 
         let board = Arc::new(ActionClientGoalBoard {
@@ -928,6 +930,7 @@ impl<A: Action> RclPrimitive for ActionClientExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_client_feedback_callback,
+                |h: &ActionClientHandle| &h.on_ready_slots[0],
                 mk(ActionClientReady {
                     feedback: true,
                     ..Default::default()
@@ -936,6 +939,7 @@ impl<A: Action> RclPrimitive for ActionClientExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_client_status_callback,
+                |h: &ActionClientHandle| &h.on_ready_slots[1],
                 mk(ActionClientReady {
                     status: true,
                     ..Default::default()
@@ -944,6 +948,7 @@ impl<A: Action> RclPrimitive for ActionClientExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_client_goal_callback,
+                |h: &ActionClientHandle| &h.on_ready_slots[2],
                 mk(ActionClientReady {
                     goal_response: true,
                     ..Default::default()
@@ -952,6 +957,7 @@ impl<A: Action> RclPrimitive for ActionClientExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_client_cancel_callback,
+                |h: &ActionClientHandle| &h.on_ready_slots[3],
                 mk(ActionClientReady {
                     cancel_response: true,
                     ..Default::default()
@@ -960,6 +966,7 @@ impl<A: Action> RclPrimitive for ActionClientExecutable<A> {
             Box::new(OnReadyRegistration::new(
                 Arc::clone(handle),
                 set_action_client_result_callback,
+                |h: &ActionClientHandle| &h.on_ready_slots[4],
                 mk(ActionClientReady {
                     result_response: true,
                     ..Default::default()
@@ -1025,6 +1032,9 @@ unsafe fn set_action_client_result_callback(
 pub struct ActionClientHandle {
     rcl_action_client: Mutex<rcl_action_client_t>,
     node_handle: Arc<NodeHandle>,
+    /// One guard per rcl callback slot (feedback, status, goal, cancel,
+    /// result); see [`OnReadySlotFn`](crate::executor::event_callback::OnReadySlotFn).
+    on_ready_slots: [AtomicBool; 5],
 }
 
 impl ActionClientHandle {

@@ -249,6 +249,7 @@ impl<Payload: 'static> RclPrimitive for DynamicSubscriptionExecutable<Payload> {
         let registration = crate::executor::event_callback::OnReadyRegistration::new(
             Arc::clone(&self.handle),
             crate::subscription::set_subscription_on_new_message,
+            crate::subscription::subscription_on_ready_slot,
             Box::new(on_ready),
         )?;
         Ok(Some(Box::new(registration)))
