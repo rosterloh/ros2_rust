@@ -372,7 +372,10 @@ mod tests {
     }
 
     fn construct_test_nodes(ns: &str) -> (Executor, TestNode, Node) {
-        let executor = Context::default().create_basic_executor();
+        construct_test_nodes_on(Context::default().create_basic_executor(), ns)
+    }
+
+    fn construct_test_nodes_on(executor: Executor, ns: &str) -> (Executor, TestNode, Node) {
         let node = executor
             .create_node(NodeOptions::new("node").namespace(ns))
             .unwrap();
@@ -608,13 +611,31 @@ mod tests {
 
     #[test]
     fn test_get_set_parameters_service() -> Result<(), RclrsError> {
-        let (mut executor, test, client_node) = construct_test_nodes("get_set");
+        get_set_parameters_service("get_set", construct_test_nodes("get_set"))
+    }
+
+    /// The same round trip, with the parameter services driven by the Tokio executor.
+    #[cfg(feature = "tokio-executor")]
+    #[test]
+    fn test_get_set_parameters_service_tokio() -> Result<(), RclrsError> {
+        let executor = Context::default().create_tokio_executor();
+        get_set_parameters_service(
+            "get_set_tokio",
+            construct_test_nodes_on(executor, "get_set_tokio"),
+        )
+    }
+
+    fn get_set_parameters_service(
+        ns: &str,
+        (mut executor, test, client_node): (Executor, TestNode, Node),
+    ) -> Result<(), RclrsError> {
         let get_client =
-            client_node.create_client::<GetParameters>("/get_set/node/get_parameters")?;
+            client_node.create_client::<GetParameters>(&*format!("/{ns}/node/get_parameters"))?;
         let set_client =
-            client_node.create_client::<SetParameters>("/get_set/node/set_parameters")?;
-        let set_atomically_client = client_node
-            .create_client::<SetParametersAtomically>("/get_set/node/set_parameters_atomically")?;
+            client_node.create_client::<SetParameters>(&*format!("/{ns}/node/set_parameters"))?;
+        let set_atomically_client = client_node.create_client::<SetParametersAtomically>(
+            &*format!("/{ns}/node/set_parameters_atomically"),
+        )?;
 
         let get_client_inner = Arc::clone(&get_client);
         let set_client_inner = Arc::clone(&set_client);
